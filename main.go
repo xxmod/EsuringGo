@@ -30,6 +30,10 @@ func main() {
 		SMSCode:       *smsCode,
 	}
 
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	log.Printf("[Main] Starting ESurfing Go client")
+	log.Printf("[Main] User: %s", *user)
+
 	states := NewStates()
 	session := NewSession()
 	client := NewClient(opts, states, session)
@@ -53,5 +57,7 @@ func main() {
 	}()
 
 	states.RefreshStates()
+	log.Printf("[Main] Client-ID: %s", states.GetClientID())
+	log.Printf("[Main] MAC: %s", states.GetMacAddress())
 	client.Run()
 }

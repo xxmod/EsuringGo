@@ -7,6 +7,7 @@ $LDFlags = "-s -w"
 $Targets = @(
     @{ GOOS = "linux";   GOARCH = "amd64" },
     @{ GOOS = "linux";   GOARCH = "arm64" },
+    @{ GOOS = "linux";   GOARCH = "arm"; GOARM = "7" },
     @{ GOOS = "windows"; GOARCH = "amd64" },
     @{ GOOS = "darwin";  GOARCH = "amd64" },
     @{ GOOS = "darwin";  GOARCH = "arm64" }
@@ -22,6 +23,7 @@ foreach ($t in $Targets) {
 
     $env:GOOS = $t.GOOS
     $env:GOARCH = $t.GOARCH
+    if ($t.ContainsKey("GOARM")) { $env:GOARM = $t.GOARM } else { Remove-Item Env:\GOARM -ErrorAction SilentlyContinue }
     go build -trimpath -ldflags="$LDFlags" -o $output .
     if ($LASTEXITCODE -ne 0) { throw "Build failed for $($t.GOOS)/$($t.GOARCH)" }
 }

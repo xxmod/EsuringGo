@@ -21,15 +21,17 @@ func xmlEscape(s string) string {
 
 // Client manages the authentication lifecycle.
 type Client struct {
-	options    Options
-	states     *States
-	session    *Session
-	httpClient *http.Client
-	keepURL    string
-	termURL    string
-	keepRetry  string
-	retryCount int
-	tick       int64
+	options       Options
+	states        *States
+	session       *Session
+	httpClient    *http.Client
+	keepURL       string
+	termURL       string
+	keepRetry     string
+	retryCount    int
+	tick          int64
+	lastStatus    network.ConnectivityStatus
+	statusChanged bool
 }
 
 // Options holds login credentials.
@@ -42,17 +44,21 @@ type Options struct {
 func NewClient(opts Options, states *States, session *Session) *Client {
 	httpClient := network.NewHTTPClient(states)
 	return &Client{
-		options:    opts,
-		states:     states,
-		session:    session,
-		httpClient: httpClient,
+		options:       opts,
+		states:        states,
+		session:       session,
+		httpClient:    httpClient,
+		lastStatus:    -1, // force first log
+		statusChanged: true,
 	}
 }
 
 // Run starts the main client loop.
 func (c *Client) Run() {
 	for c.states.IsRunning() {
-		status := network.DetectConfig(c.states)
+		status := network.DetectConfig(c.states, c.statusChanged)
+		c.statusChanged = status.Status != c.lastStatus
+		c.lastStatus = status.Status
 
 		switch status.Status {
 		case network.StatusSuccess:
@@ -60,21 +66,25 @@ func (c *Client) Run() {
 				nowMs := time.Now().UnixMilli()
 				retryMs, err := strconv.ParseInt(c.keepRetry, 10, 64)
 				if err == nil && nowMs-c.tick >= retryMs*1000 {
-					log.Println("Send Keep Packet")
+					log.Println("[Client] Sending heartbeat...")
 					if err := c.heartbeat(c.states.GetTicket()); err != nil {
-						log.Printf("Heartbeat error: %v", err)
+						log.Printf("[Client] Heartbeat error: %v", err)
 						c.states.SetLogged(false)
+						c.statusChanged = true
 						continue
 					}
-					log.Printf("Next Retry: %s", c.keepRetry)
+					log.Printf("[Client] Heartbeat OK, next retry: %ss", c.keepRetry)
 					c.tick = time.Now().UnixMilli()
 				}
-			} else {
-				log.Println("The network has been connected.")
+			} else if c.statusChanged {
+				log.Println("[Client] Network is connected.")
 			}
 			time.Sleep(1 * time.Second)
 
 		case network.StatusRequireAuthorization:
+			if c.statusChanged {
+				log.Println("[Client] Network requires authorization, starting auth flow...")
+			}
 			c.states.SetLogged(false)
 			// Apply detected config to states
 			c.states.SetAuthURL(status.AuthURL)
@@ -94,9 +104,12 @@ func (c *Client) Run() {
 				c.states.SetExtraCfgURL(status.ExtraCfgURL)
 			}
 			c.authorization()
+			c.statusChanged = true // force log after auth attempt
 
 		case network.StatusRequestError:
-			log.Println("Request Error")
+			if c.statusChanged {
+				log.Println("[Client] Request Error - see detailed logs above")
+			}
 			time.Sleep(5 * time.Second)
 		}
 	}
@@ -125,9 +138,12 @@ func (c *Client) authorization() {
 
 	c.retryCount = 0
 	c.states.SetAlgoID(c.session.GetAlgoID())
-	log.Printf("Algo Id: %s", c.session.GetAlgoID())
-	log.Printf("Client IP: %s", c.states.GetUserIP())
-	log.Printf("AC IP: %s", c.states.GetAcIP())
+	log.Printf("[Client] Algo Id: %s", c.session.GetAlgoID())
+	log.Printf("[Client] Client ID: %s", c.states.GetClientID())
+	log.Printf("[Client] Client IP: %s", c.states.GetUserIP())
+	log.Printf("[Client] AC IP: %s", c.states.GetAcIP())
+	log.Printf("[Client] MAC: %s", c.states.GetMacAddress())
+	log.Printf("[Client] SchoolID: %s, Domain: %s, Area: %s", c.states.GetSchoolID(), c.states.GetDomain(), c.states.GetArea())
 
 	ticket, err := c.getTicket()
 	if err != nil {
@@ -135,7 +151,7 @@ func (c *Client) authorization() {
 		return
 	}
 	c.states.SetTicket(ticket)
-	log.Printf("Ticket: %s", c.states.GetTicket())
+	log.Printf("[Client] Ticket: %s", c.states.GetTicket())
 
 	if err := c.login(code); err != nil {
 		log.Printf("Login error: %v", err)
@@ -143,7 +159,7 @@ func (c *Client) authorization() {
 	}
 
 	if c.keepURL == "" {
-		log.Println("KeepUrl is empty.")
+		log.Println("[Client] KeepUrl is empty, login may have failed.")
 		c.session.Free()
 		c.states.SetRunning(false)
 		return
@@ -151,7 +167,7 @@ func (c *Client) authorization() {
 
 	c.tick = time.Now().UnixMilli()
 	c.states.SetLogged(true)
-	log.Println("The login has been authorized.")
+	log.Println("[Client] The login has been authorized.")
 }
 
 func (c *Client) checkSMSVerify() string {
@@ -173,12 +189,15 @@ func (c *Client) checkSMSVerify() string {
 }
 
 func (c *Client) initSession() {
+	log.Printf("[Client] Initializing session, TicketURL: %s, AlgoID: %s", c.states.GetTicketURL(), c.states.GetAlgoID())
 	body, err := network.PostRaw(c.httpClient, c.states.GetTicketURL(), c.states.GetAlgoID(), c.states)
 	if err != nil {
-		log.Printf("Init session error: %v", err)
+		log.Printf("[Client] Init session error: %v", err)
 		return
 	}
+	log.Printf("[Client] Session ZSM response: %d bytes", len(body))
 	c.session.Initialize(body)
+	log.Printf("[Client] Session initialized: %v, AlgoID: %s", c.session.IsInitialized(), c.session.GetAlgoID())
 }
 
 func (c *Client) getTicket() (string, error) {
@@ -203,19 +222,23 @@ func (c *Client) getTicket() (string, error) {
 		c.states.GetAcIP(),
 	)
 
+	log.Printf("[Client] getTicket payload: %s", payload)
 	encrypted, err := c.session.Encrypt(payload)
 	if err != nil {
 		return "", fmt.Errorf("encrypt ticket payload: %w", err)
 	}
+	log.Printf("[Client] getTicket encrypted (first 200): %.200s", encrypted)
 	data, err := network.Post(c.httpClient, c.states.GetTicketURL(), encrypted, c.states, nil)
 	if err != nil {
 		return "", err
 	}
+	log.Printf("[Client] getTicket raw response (first 500): %.500s", data)
 
 	decrypted, err := c.session.Decrypt(data)
 	if err != nil {
 		return "", fmt.Errorf("decrypt ticket response: %w", err)
 	}
+	log.Printf("[Client] getTicket decrypted: %s", decrypted)
 	ticket := extractXMLTag(decrypted, "ticket")
 	return ticket, nil
 }
@@ -244,19 +267,23 @@ func (c *Client) login(code string) error {
 		verify,
 	)
 
+	log.Printf("[Client] login payload: %s", payload)
 	encrypted, err := c.session.Encrypt(payload)
 	if err != nil {
 		return fmt.Errorf("encrypt login payload: %w", err)
 	}
+	log.Printf("[Client] login encrypted (first 200): %.200s", encrypted)
 	data, err := network.Post(c.httpClient, c.states.GetAuthURL(), encrypted, c.states, nil)
 	if err != nil {
 		return err
 	}
+	log.Printf("[Client] login raw response (first 500): %.500s", data)
 
 	decrypted, err := c.session.Decrypt(data)
 	if err != nil {
 		return fmt.Errorf("decrypt login response: %w", err)
 	}
+	log.Printf("[Client] login decrypted: %s", decrypted)
 	c.keepURL = extractXMLTag(decrypted, "keep-url")
 	c.termURL = extractXMLTag(decrypted, "term-url")
 	c.keepRetry = extractXMLTag(decrypted, "keep-retry")
@@ -341,7 +368,7 @@ func (c *Client) Term() {
 	_, _ = network.Post(c.httpClient, c.termURL, encrypted, c.states, nil)
 }
 
-// extractXMLTag is a simple XML tag value extractor.
+// extractXMLTag is a simple XML tag value extractor that also strips CDATA wrappers.
 func extractXMLTag(xml, tag string) string {
 	startTag := "<" + tag + ">"
 	endTag := "</" + tag + ">"
@@ -354,5 +381,12 @@ func extractXMLTag(xml, tag string) string {
 	if end == -1 {
 		return ""
 	}
-	return xml[start : start+end]
+	val := xml[start : start+end]
+	// Strip CDATA wrapper if present
+	const cdataPrefix = "<![CDATA["
+	const cdataSuffix = "]]>"
+	if strings.HasPrefix(val, cdataPrefix) && strings.HasSuffix(val, cdataSuffix) {
+		val = val[len(cdataPrefix) : len(val)-len(cdataSuffix)]
+	}
+	return val
 }
