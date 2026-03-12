@@ -26,8 +26,14 @@ func TestSessionRoundTrip(t *testing.T) {
 
 	// If initialized, test encrypt/decrypt
 	original := "hello world"
-	encrypted := sess.Encrypt(original)
-	decrypted := sess.Decrypt(encrypted)
+	encrypted, err := sess.Encrypt(original)
+	if err != nil {
+		t.Fatalf("Encrypt error: %v", err)
+	}
+	decrypted, err := sess.Decrypt(encrypted)
+	if err != nil {
+		t.Fatalf("Decrypt error: %v", err)
+	}
 	if decrypted != original {
 		t.Errorf("Session round-trip failed: got %q, want %q", decrypted, original)
 	}
@@ -35,6 +41,12 @@ func TestSessionRoundTrip(t *testing.T) {
 	sess.Free()
 	if sess.IsInitialized() {
 		t.Error("Session should not be initialized after Free()")
+	}
+
+	// After Free, Encrypt/Decrypt should return error
+	_, err = sess.Encrypt("test")
+	if err == nil {
+		t.Error("Encrypt after Free should return error")
 	}
 }
 

@@ -56,7 +56,10 @@ func (a *AESECB) Encrypt(text string) string {
 }
 
 func (a *AESECB) Decrypt(hexStr string) string {
-	data, _ := hexDecode(hexStr)
+	data, err := hexDecode(hexStr)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
 	r1 := a.aesDecrypt(data, a.key2)
 	r2 := a.aesDecrypt(r1, a.key1)
 	return string(stripTrailingZeros(r2))

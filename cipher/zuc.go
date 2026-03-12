@@ -35,7 +35,10 @@ func (z *ZUCCipher) Encrypt(text string) string {
 }
 
 func (z *ZUCCipher) Decrypt(hexStr string) string {
-	data, _ := hexDecode(hexStr)
+	data, err := hexDecode(hexStr)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
 	result := z.processZUC(data)
 	return string(stripTrailingZeros(result))
 }

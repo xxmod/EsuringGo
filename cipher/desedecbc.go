@@ -44,7 +44,10 @@ func (d *DESedeCBC) Encrypt(text string) string {
 }
 
 func (d *DESedeCBC) Decrypt(hexStr string) string {
-	data, _ := hexDecode(hexStr)
+	data, err := hexDecode(hexStr)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
 	r1 := d.tripleDesDecrypt(data, d.key2)
 	r2 := d.tripleDesDecrypt(r1, d.key1)
 	return string(stripTrailingZeros(r2))

@@ -25,7 +25,10 @@ func (s *SM4ECB) Encrypt(text string) string {
 }
 
 func (s *SM4ECB) Decrypt(hexStr string) string {
-	data, _ := hexDecode(hexStr)
+	data, err := hexDecode(hexStr)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
 	block, err := sm4.NewCipher(s.key)
 	if err != nil {
 		panic(err)

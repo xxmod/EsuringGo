@@ -13,6 +13,12 @@ import (
 	"time"
 )
 
+// xmlEscape escapes special XML characters in user input.
+func xmlEscape(s string) string {
+	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\"", "&quot;", "'", "&apos;")
+	return r.Replace(s)
+}
+
 // Client manages the authentication lifecycle.
 type Client struct {
 	options    Options
@@ -197,12 +203,19 @@ func (c *Client) getTicket() (string, error) {
 		c.states.GetAcIP(),
 	)
 
-	data, err := network.Post(c.httpClient, c.states.GetTicketURL(), c.session.Encrypt(payload), c.states, nil)
+	encrypted, err := c.session.Encrypt(payload)
+	if err != nil {
+		return "", fmt.Errorf("encrypt ticket payload: %w", err)
+	}
+	data, err := network.Post(c.httpClient, c.states.GetTicketURL(), encrypted, c.states, nil)
 	if err != nil {
 		return "", err
 	}
 
-	decrypted := c.session.Decrypt(data)
+	decrypted, err := c.session.Decrypt(data)
+	if err != nil {
+		return "", fmt.Errorf("decrypt ticket response: %w", err)
+	}
 	ticket := extractXMLTag(decrypted, "ticket")
 	return ticket, nil
 }
@@ -210,7 +223,7 @@ func (c *Client) getTicket() (string, error) {
 func (c *Client) login(code string) error {
 	verify := ""
 	if strings.TrimSpace(code) != "" {
-		verify = "<verify>" + code + "</verify>"
+		verify = "<verify>" + xmlEscape(code) + "</verify>"
 	}
 
 	payload := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
@@ -226,17 +239,24 @@ func (c *Client) login(code string) error {
 		c.states.GetClientID(),
 		c.states.GetTicket(),
 		utils.GetTime(),
-		c.options.LoginUser,
-		c.options.LoginPassword,
+		xmlEscape(c.options.LoginUser),
+		xmlEscape(c.options.LoginPassword),
 		verify,
 	)
 
-	data, err := network.Post(c.httpClient, c.states.GetAuthURL(), c.session.Encrypt(payload), c.states, nil)
+	encrypted, err := c.session.Encrypt(payload)
+	if err != nil {
+		return fmt.Errorf("encrypt login payload: %w", err)
+	}
+	data, err := network.Post(c.httpClient, c.states.GetAuthURL(), encrypted, c.states, nil)
 	if err != nil {
 		return err
 	}
 
-	decrypted := c.session.Decrypt(data)
+	decrypted, err := c.session.Decrypt(data)
+	if err != nil {
+		return fmt.Errorf("decrypt login response: %w", err)
+	}
 	c.keepURL = extractXMLTag(decrypted, "keep-url")
 	c.termURL = extractXMLTag(decrypted, "term-url")
 	c.keepRetry = extractXMLTag(decrypted, "keep-retry")
@@ -270,12 +290,19 @@ func (c *Client) heartbeat(ticket string) error {
 		HostName,
 	)
 
-	data, err := network.Post(c.httpClient, c.keepURL, c.session.Encrypt(payload), c.states, nil)
+	encrypted, err := c.session.Encrypt(payload)
+	if err != nil {
+		return fmt.Errorf("encrypt heartbeat payload: %w", err)
+	}
+	data, err := network.Post(c.httpClient, c.keepURL, encrypted, c.states, nil)
 	if err != nil {
 		return err
 	}
 
-	decrypted := c.session.Decrypt(data)
+	decrypted, err := c.session.Decrypt(data)
+	if err != nil {
+		return fmt.Errorf("decrypt heartbeat response: %w", err)
+	}
 	interval := extractXMLTag(decrypted, "interval")
 	if interval != "" {
 		c.keepRetry = interval
@@ -306,7 +333,12 @@ func (c *Client) Term() {
 		HostName,
 	)
 
-	_, _ = network.Post(c.httpClient, c.termURL, c.session.Encrypt(payload), c.states, nil)
+	encrypted, err := c.session.Encrypt(payload)
+	if err != nil {
+		log.Printf("encrypt term payload: %v", err)
+		return
+	}
+	_, _ = network.Post(c.httpClient, c.termURL, encrypted, c.states, nil)
 }
 
 // extractXMLTag is a simple XML tag value extractor.

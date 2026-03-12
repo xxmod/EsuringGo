@@ -45,9 +45,15 @@ func (a *AESCBC) Encrypt(text string) string {
 }
 
 func (a *AESCBC) Decrypt(hexStr string) string {
-	data, _ := hexDecode(hexStr)
+	data, err := hexDecode(hexStr)
+	if err != nil || len(data) < 32 {
+		return ""
+	}
 	// skip first 16 bytes (IV) for each layer
 	r1 := a.aesDecrypt(data[16:], a.key2)
+	if len(r1) < 16 {
+		return ""
+	}
 	r2 := a.aesDecrypt(r1[16:], a.key1)
 	return string(stripTrailingZeros(r2))
 }

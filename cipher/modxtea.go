@@ -82,7 +82,10 @@ func (m *ModXTEA) Encrypt(text string) string {
 }
 
 func (m *ModXTEA) Decrypt(hexStr string) string {
-	blocks, _ := hexDecode(hexStr)
+	blocks, err := hexDecode(hexStr)
+	if err != nil || len(blocks) == 0 {
+		return ""
+	}
 	for i := 0; i+7 < len(blocks); i += 8 {
 		v0 := getUint32BE(blocks, i)
 		v1 := getUint32BE(blocks, i+4)
